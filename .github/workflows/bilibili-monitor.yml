@@ -1,0 +1,34 @@
+# 任务名称
+name: Bilibili Comment Monitor To Feishu
+# 触发规则：每5分钟定时执行 + 手动触发测试
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+# 执行任务
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    steps:
+      # 拉取仓库代码（必须）
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 配置Python3.10环境
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      # 仅安装requests（基础库，无编译，100%成功）
+      - name: Install only requests
+        run: pip install requests
+
+      # 执行监控脚本，传递密钥
+      - name: Run monitor script
+        env:
+          FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
+          FEISHU_SECRET: ${{ secrets.FEISHU_SECRET }}
+          BILIBILI_UID: ${{ secrets.BILIBILI_UID }}
+        run: python monitor.py
