@@ -4,15 +4,19 @@ import os
 from hashlib import sha256
 import hmac
 import base64
-from bilibili_api import user, sync, video
 
-# 从GitHub Secrets读取配置（无需修改）
-UP_UID = os.getenv("BILIBILI_UID")
+# 从GitHub Secrets读取配置，无需修改
+UP_UID = os.getenv("BILIBILI_UID") or "1671203508"
 FEISHU_WEBHOOK = os.getenv("FEISHU_WEBHOOK")
 FEISHU_SECRET = os.getenv("FEISHU_SECRET")
-CHECK_INTERVAL = 60  # 单次检查间隔，不影响定时任务
 
-# 飞书加签计算（适配飞书机器人加签，无需修改）
+# B站原生API请求头，模拟浏览器，避免被屏蔽
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Referer": "https://www.bilibili.com/"
+}
+
+# 飞书加签计算，适配你的机器人加签，无需修改
 def get_feishu_sign(timestamp):
     if not FEISHU_SECRET:
         return ""
@@ -22,10 +26,10 @@ def get_feishu_sign(timestamp):
     hmac_code = hmac.new(secret_enc, string_to_sign_enc, digestmod=sha256).digest()
     return base64.b64encode(hmac_code).decode("utf-8")
 
-# 发送飞书消息（无需修改）
+# 发送飞书消息，无需修改
 def send_feishu_msg(content):
     if not FEISHU_WEBHOOK:
-        print("飞书Webhook未配置")
+        print("飞书Webhook未配置！")
         return
     timestamp = str(int(time.time()))
     sign = get_feishu_sign(timestamp)
@@ -33,89 +37,77 @@ def send_feishu_msg(content):
     if sign:
         headers["timestamp"] = timestamp
         headers["sign"] = sign
-    data = {
-        "msg_type": "text",
-        "content": {"text": content}
-    }
+    data = {"msg_type": "text", "content": {"text": content}}
     try:
         res = requests.post(FEISHU_WEBHOOK, headers=headers, json=data, timeout=10)
-        if res.status_code == 200:
-            print("飞书消息推送成功")
+        if res.status_code == 200 and res.json().get("code") == 0:
+            print("✅ 飞书消息推送成功！")
         else:
-            print(f"飞书推送失败：{res.text}")
+            print(f"❌ 飞书推送失败：{res.text}")
     except Exception as e:
-        print(f"飞书推送异常：{str(e)}")
+        print(f"❌ 飞书推送异常：{str(e)}")
+        send_feishu_msg(f"⚠️ B站监控飞书推送异常：{str(e)[:150]}")
 
-# 读取上次最后评论ID（GitHub Actions临时存储，防单次重复）
-def get_last_rpid():
+# 获取UP主最新视频（B站原生API）
+def get_up_latest_video(uid):
+    url = f"https://api.bilibili.com/x/space/wbi/arc/search?mid={uid}&ps=1&pn=1&order=pubdate"
     try:
-        with open("last_rpid.txt", "r", encoding="utf-8") as f:
-            return f.read().strip()
-    except:
-        return ""
-
-# 保存最新评论ID
-def save_last_rpid(rpid):
-    with open("last_rpid.txt", "w", encoding="utf-8") as f:
-        f.write(str(rpid))
-
-# 核心：监控B站UP主最新视频评论
-def monitor_comments():
-    try:
-        # 获取UP主信息
-        u = user.User(UP_UID)
-        up_info = sync(u.get_info())
-        up_name = up_info["name"]
-        print(f"开始监控UP主：{up_name}（UID：{UP_UID}）")
-
-        # 获取UP主最新发布的视频（优先最新，避免抓旧视频）
-        videos = sync(u.get_videos(pn=1, ps=1, order="pubdate"))
-        if not videos:
-            send_feishu_msg(f"⚠️ UP主{up_name}暂无公开视频，监控失败")
-            return
-        latest_vid = videos[0]["bvid"]
-        latest_vtitle = videos[0]["title"]
-        v = video.Video(bvid=latest_vid)
-
-        # 获取视频最新评论（前20条，足够监控新增）
-        comments = sync(v.get_comments(page=1, size=20, sort=0))
-        if not comments.get("replies"):
-            print("暂无新评论")
-            return
-        replies = comments["replies"]
-        last_rpid = get_last_rpid()
-        new_comments = []
-
-        # 筛选新增评论（去重）
-        for rep in replies:
-            rpid = rep["rpid"]
-            if str(rpid) != last_rpid:
-                new_comments.append(rep)
-            else:
-                break  # 按时间排序，找到上次的ID则停止
-        if not new_comments:
-            print("无新增评论")
-            return
-
-        # 保存最新评论ID，防重复
-        save_last_rpid(new_comments[0]["rpid"])
-
-        # 拼接消息并推送（多条评论合并）
-        msg_prefix = f"🎉 UP主【{up_name}】最新视频新评论\n视频：{latest_vtitle}\n链接：https://www.bilibili.com/video/{latest_vid}\n\n"
-        msg_content = ""
-        for idx, rep in enumerate(new_comments[:5]):  # 最多推送5条新增，避免刷屏
-            uname = rep["member"]["uname"]
-            content = rep["content"]["message"].replace("\n", " ")
-            comment_link = f"https://www.bilibili.com/video/{latest_vid}#reply{rep['rpid']}"
-            msg_content += f"{idx+1}. 【{uname}】：{content}\n链接：{comment_link}\n\n"
-        final_msg = msg_prefix + msg_content.strip()
-        send_feishu_msg(final_msg)
-        print(f"推送{len(new_comments)}条新评论")
-
+        res = requests.get(url, headers=HEADERS, timeout=10).json()
+        if res.get("code") != 0:
+            send_feishu_msg(f"⚠️ 获取UP主{uid}视频失败：{res.get('message')}")
+            return None, None
+        video_data = res["data"]["list"]["vlist"][0]
+        bvid = video_data["bvid"]  # 视频BV号
+        title = video_data["title"]  # 视频标题
+        return bvid, title
     except Exception as e:
-        error_msg = f"⚠️ B站评论监控异常：{str(e)[:200]}"
-        print(error_msg)
-        send_feishu_msg(error_msg)
+        send_feishu_msg(f"⚠️ 获取最新视频异常：{str(e)[:150]}")
+        return None, None
+
+# 获取视频最新评论（B站原生API）
+def get_video_comments(bvid):
+    # B站评论API，取最新10条
+    url = f"https://api.bilibili.com/x/v2/reply/wbi?type=1&oid={get_oid_by_bvid(bvid)}&ps=10&pn=1&sort=0"
+    try:
+        res = requests.get(url, headers=HEADERS, timeout=10).json()
+        if res.get("code") != 0:
+            print(f"获取评论失败：{res.get('message')}")
+            return []
+        return res.get("data", {}).get("replies", [])
+    except Exception as e:
+        print(f"获取评论异常：{str(e)}")
+        return []
+
+# 辅助：BV号转OID（B站评论API需要OID）
+def get_oid_by_bvid(bvid):
+    url = f"https://api.bilibili.com/x/web-interface/view?bvid={bvid}"
+    res = requests.get(url, headers=HEADERS, timeout=10).json()
+    return res.get("data", {}).get("aid", "")
+
+# 核心监控逻辑
+def main():
+    print(f"🚀 开始监控B站UP主（UID：{UP_UID}）最新视频评论")
+    # 获取UP主最新视频
+    bvid, video_title = get_up_latest_video(UP_UID)
+    if not bvid or not video_title:
+        return
+    video_url = f"https://www.bilibili.com/video/{bvid}"
+    # 获取最新评论
+    comments = get_video_comments(bvid)
+    if not comments:
+        print("📭 暂无新评论")
+        send_feishu_msg(f"📌 B站UP主监控（UID：{UP_UID}）\n最新视频：{video_title}\n{video_url}\n当前暂无新评论")
+        return
+    # 拼接评论消息
+    msg = f"🎉 B站UP主（UID：{UP_UID}）最新视频新评论\n📺 视频：{video_title}\n🔗 视频链接：{video_url}\n\n"
+    for idx, c in enumerate(comments[:5], 1):  # 最多推送5条，避免刷屏
+        uname = c.get("member", {}).get("uname", "匿名用户")
+        content = c.get("content", {}).get("message", "无内容").replace("\n", " ")
+        rpid = c.get("rpid", "")
+        comment_url = f"{video_url}#reply{rpid}"
+        msg += f"{idx}. 👤 {uname}：{content}\n💬 评论链接：{comment_url}\n\n"
+    # 推送飞书
+    send_feishu_msg(msg.strip())
 
 if __name__ == "__main__":
-    monitor_comments()
+    main()
