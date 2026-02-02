@@ -1,0 +1,41 @@
+# 任务名称
+name: Bilibili Comment Monitor To Feishu
+# 触发规则：每5分钟定时+手动触发
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+jobs:
+  monitor-bilibili-comment:
+    runs-on: ubuntu-latest
+    steps:
+      # 拉取仓库代码（必须）
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 配置Python3.10（无缓存，避免之前的报错）
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      # 核心：安装系统依赖+指定版本预编译pyyaml+安装所有依赖（无编译）
+      - name: Install all dependencies (no build)
+        run: |
+          # 安装系统基础依赖（兜底）
+          sudo apt-get update -y && sudo apt-get install -y gcc python3-dev
+          # 升级pip到稳定版
+          python -m pip install --upgrade pip==25.3.1
+          # 关键1：安装bilibili_api要求的5.4.1版pyyaml预编译包，跳过编译
+          pip install pyyaml==5.4.1 --only-binary=:all: --force-reinstall
+          # 关键2：安装bilibili_api和requests，此时pyyaml版本完全匹配，不会重新编译
+          pip install bilibili_api==9.1.0 requests==2.32.5 --only-binary=:all:
+
+      # 执行监控脚本（传递密钥）
+      - name: Run monitor script
+        env:
+          FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
+          FEISHU_SECRET: ${{ secrets.FEISHU_SECRET }}
+          BILIBILI_UID: ${{ secrets.BILIBILI_UID }}
+        run: python monitor.py
