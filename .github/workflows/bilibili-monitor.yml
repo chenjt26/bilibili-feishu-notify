@@ -39,9 +39,3 @@ jobs:
           BILIBILI_UID: ${{ secrets.BILIBILI_UID }}
         run: python monitor.py
 
-      # 保存评论ID文件（防单次任务重复推送）
-      - name: Save last comment ID
-        uses: actions/upload-artifact@v4
-        with:
-          name: last-rpid
-          path: last_rpid.txt
