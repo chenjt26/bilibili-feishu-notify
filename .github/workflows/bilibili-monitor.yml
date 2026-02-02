@@ -1,0 +1,32 @@
+name: Bilibili Comment Monitor To Feishu
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+jobs:
+  monitor-bilibili-comment:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies (no build)
+        run: |
+          sudo apt-get update -y
+          # 核心：预编译安装pyyaml5.4.1（bilibili_api兼容版）
+          pip install pyyaml==5.4.1 --only-binary=:all: --force-reinstall
+          # 预编译安装所有依赖，无源码编译
+          pip install bilibili_api==9.1.0 requests==2.32.5 --only-binary=:all:
+
+      - name: Run monitor script
+        env:
+          FEISHU_WEBHOOK: ${{ secrets.FEISHU_WEBHOOK }}
+          FEISHU_SECRET: ${{ secrets.FEISHU_SECRET }}
+          BILIBILI_UID: ${{ secrets.BILIBILI_UID }}
+        run: python monitor.py
