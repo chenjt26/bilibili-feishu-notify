@@ -27,6 +27,7 @@ jobs:
       # 安装脚本所需依赖（B站API+请求库）
       - name: Install dependencies
         run: |
+          sudo apt-get update && sudo apt-get install -y gcc python3-dev  # 新增这行：安装编译依赖
           python -m pip install --upgrade pip
           pip install bilibili_api requests
 
