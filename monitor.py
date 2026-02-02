@@ -16,53 +16,57 @@ HEADERS = {
     "Referer": "https://www.bilibili.com/"
 }
 
-# 飞书加签计算，适配你的机器人加签，无需修改
-def get_feishu_sign(timestamp):
-    if not FEISHU_SECRET:
-        return ""
-    secret_enc = FEISHU_SECRET.encode("utf-8")
-    string_to_sign = f"{timestamp}\n{FEISHU_SECRET}"
-    string_to_sign_enc = string_to_sign.encode("utf-8")
-    hmac_code = hmac.new(secret_enc, string_to_sign_enc, digestmod=sha256).digest()
+# 飞书加签计算（飞书官方标准逻辑，适配所有加签机器人）
+def get_feishu_sign(timestamp, secret):
+    import hmac
+    import base64
+    from hashlib import sha256
+    # 官方标准：timestamp + "\n" + secret 进行hmac-sha256加密
+    string_to_sign = f"{timestamp}\n{secret}".encode("utf-8")
+    hmac_code = hmac.new(secret.encode("utf-8"), string_to_sign, digestmod=sha256).digest()
+    # 对加密结果做base64编码
     return base64.b64encode(hmac_code).decode("utf-8")
 
-# 发送飞书消息，无需修改
+# 发送飞书消息（修复签名+时间戳，适配加签机器人）
 def send_feishu_msg(content):
     if not FEISHU_WEBHOOK:
-        print("飞书Webhook未配置！")
+        print("❌ 飞书Webhook未配置！")
         return
+    # 取当前精准时间戳（秒级，飞书要求）
     timestamp = str(int(time.time()))
-    sign = get_feishu_sign(timestamp)
-    headers = {"Content-Type": "application/json"}
-    if sign:
+    headers = {"Content-Type": "application/json; charset=utf-8"}
+    # 如果配置了Secret，添加签名和时间戳（飞书加签必传）
+    if FEISHU_SECRET and FEISHU_SECRET.strip() != "":
+        sign = get_feishu_sign(timestamp, FEISHU_SECRET)
         headers["timestamp"] = timestamp
         headers["sign"] = sign
-    data = {"msg_type": "text", "content": {"text": content}}
+    # 飞书消息体（纯文本格式，适配所有机器人）
+    data = {
+        "msg_type": "text",
+        "content": {
+            "text": content
+        }
+    }
     try:
-        res = requests.post(FEISHU_WEBHOOK, headers=headers, json=data, timeout=10)
-        if res.status_code == 200 and res.json().get("code") == 0:
+        # 关闭重定向，超时设为15秒，适配飞书接口
+        res = requests.post(
+            FEISHU_WEBHOOK,
+            headers=headers,
+            json=data,
+            timeout=15,
+            allow_redirects=False
+        )
+        res.raise_for_status()  # 抛出HTTP错误
+        res_json = res.json()
+        if res_json.get("code") == 0:
             print("✅ 飞书消息推送成功！")
+            return True
         else:
-            print(f"❌ 飞书推送失败：{res.text}")
+            print(f"❌ 飞书推送失败：{res_json.get('msg', '未知错误')}，状态码：{res_json.get('code')}")
+            print(f"请求头：{headers}，请求体：{data}")
     except Exception as e:
-        print(f"❌ 飞书推送异常：{str(e)}")
-        send_feishu_msg(f"⚠️ B站监控飞书推送异常：{str(e)[:150]}")
-
-# 获取UP主最新视频（B站原生API）
-def get_up_latest_video(uid):
-    url = f"https://api.bilibili.com/x/space/wbi/arc/search?mid={uid}&ps=1&pn=1&order=pubdate"
-    try:
-        res = requests.get(url, headers=HEADERS, timeout=10).json()
-        if res.get("code") != 0:
-            send_feishu_msg(f"⚠️ 获取UP主{uid}视频失败：{res.get('message')}")
-            return None, None
-        video_data = res["data"]["list"]["vlist"][0]
-        bvid = video_data["bvid"]  # 视频BV号
-        title = video_data["title"]  # 视频标题
-        return bvid, title
-    except Exception as e:
-        send_feishu_msg(f"⚠️ 获取最新视频异常：{str(e)[:150]}")
-        return None, None
+        print(f"❌ 飞书推送网络/解析异常：{str(e)}")
+    return False
 
 # 获取视频最新评论（B站原生API）
 def get_video_comments(bvid):
